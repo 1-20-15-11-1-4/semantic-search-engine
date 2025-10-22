@@ -1,0 +1,87 @@
+import gradio as gr
+from sentence_transformers import SentenceTransformer
+import faiss
+import numpy as np
+
+# Load embedding model
+model = SentenceTransformer('all-MiniLM-L6-v2')
+
+# Global storage for documents and embeddings
+documents = []
+embeddings = None
+index = None
+
+def add_documents(text_input):
+    """Add documents to the search index"""
+    global documents, embeddings, index
+    
+    # Split by double newlines (each doc separated by blank line)
+    docs = [doc.strip() for doc in text_input.split('\n\n') if doc.strip()]
+    
+    if not docs:
+        return "❌ No documents found. Separate documents with blank lines."
+    
+    # Store documents
+    documents = docs
+    
+    # Create embeddings
+    embeddings = model.encode(documents)
+    
+    # Create FAISS index
+    dimension = embeddings.shape[1]
+    index = faiss.IndexFlatL2(dimension)
+    index.add(np.array(embeddings).astype('float32'))
+    
+    return f"✅ Added {len(documents)} documents to search index!"
+
+def search_documents(query, top_k=3):
+    """Search for relevant documents"""
+    global documents, index
+    
+    if not documents or index is None:
+        return "❌ No documents in index. Add documents first!"
+    
+    # Encode query
+    query_embedding = model.encode([query])
+    
+    # Search
+    distances, indices = index.search(np.array(query_embedding).astype('float32'), min(top_k, len(documents)))
+    
+    # Format results
+    results = f"## Search Results for: '{query}'\n\n"
+    for i, (idx, distance) in enumerate(zip(indices[0], distances[0])):
+        similarity = 1 / (1 + distance)
+        results += f"### Result {i+1} (Similarity: {similarity:.2%})\n"
+        results += f"{documents[idx]}\n\n"
+        results += "---\n\n"
+    
+    return results
+
+# Create interface
+with gr.Blocks(title="Semantic Search Engine") as demo:
+    gr.Markdown("# 🔍 AI Semantic Search Engine")
+    gr.Markdown("Upload documents and search using natural language. AI finds relevant content based on meaning, not just keywords.")
+    
+    with gr.Tab("Add Documents"):
+        doc_input = gr.Textbox(
+            label="Paste Documents (separate each document with a blank line)",
+            lines=15,
+            placeholder="Document 1 text here\n\nDocument 2 text here\n\nDocument 3 text here..."
+        )
+        add_btn = gr.Button("Add to Search Index")
+        add_output = gr.Textbox(label="Status")
+        
+        add_btn.click(add_documents, inputs=doc_input, outputs=add_output)
+    
+    with gr.Tab("Search"):
+        search_input = gr.Textbox(
+            label="Search Query",
+            placeholder="What are you looking for?"
+        )
+        num_results = gr.Slider(minimum=1, maximum=10, value=3, step=1, label="Number of Results")
+        search_btn = gr.Button("Search")
+        search_output = gr.Markdown(label="Results")
+        
+        search_btn.click(search_documents, inputs=[search_input, num_results], outputs=search_output)
+
+demo.launch()
